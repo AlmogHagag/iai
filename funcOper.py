@@ -23,28 +23,42 @@ import csv
 import datasetPythorch as iai
 
 
+def testModelVec(digits_dattaset, modelTest):
+    mseTotal = 0
+    failCount = 0
+    modelTest.eval()
+    for index in range(len(digits_dattaset)):
+        sample = digits_dattaset.__getitem__(index)
+        inputs = torch.tensor(sample['image'])
+        labels = torch.tensor(sample['landmarks'])
+        inputs2_reshape = np.reshape(inputs, (1, 1, inputs.shape[1], inputs.shape[2]))
+        outputs = modelTest(inputs2_reshape)
+
+        outputs = outputs.float().detach().numpy()
+        labels = labels.float().detach().numpy()
+        currentMse = np.sum(((labels - outputs) * 100) ** 2) ** 0.5
+        # print('mse = ', currentMse)
+        mseTotal += currentMse
+        if currentMse > 20:
+            failCount += 1
+
+    print('mse = ', mseTotal / len(digits_dattaset))
+    print('Count fail = ', failCount)
+    return mseTotal
 
 
-
-def testModel(digits_dattaset, index):
+def testModel(digits_dattaset, index, strPath):
     sample = digits_dattaset.__getitem__(index)
     inputs = torch.tensor(sample['image'])
     labels = torch.tensor(sample['landmarks'])
     inputs2 = np.reshape(inputs, (1, 1, inputs.shape[1], inputs.shape[2]))
-
-    print('inputs2 shape = ', inputs2.shape)
-
-    image = inputs
-    image = image.numpy()
-    image = np.reshape(image, (image.shape[1], image.shape[2]))
-    print('image shape = ', image.shape)
 
     print("For one iteration, Test:")
     print("second Input Shape:", inputs.shape)
     print("second Labels Shape:", labels.shape)
 
     modelTest = iai.CNN_Detection()
-    modelTest.load_state_dict(torch.load('CNN_MNIST_detection.pth'))
+    modelTest.load_state_dict(torch.load(strPath + '.pth'))
     modelTest.eval()
     outputs = modelTest(inputs2)
 
@@ -52,9 +66,13 @@ def testModel(digits_dattaset, index):
     labels = labels.float()
     print('outputs =', outputs * 100)
     print('labels  = ', labels * 100)
+    labels_np = labels.numpy() * 100
+    image = inputs.numpy()
+    image = np.reshape(image, (image.shape[1], image.shape[2]))
+    return labels_np, image
 
 
-def TrainNet(dataloader):
+def TrainNet(dataloader, batch_size, dataloaderTest):
     model = iai.CNN_Detection()
     CUDA = torch.cuda.is_available()
     print('CUDA = ', CUDA)
@@ -159,9 +177,9 @@ def TrainNet(dataloader):
 
         model.eval()  # Put the network into evaluation mode
 
-        for i, sample_eval in enumerate(dataloader):
+        for i, sample_eval in enumerate(dataloaderTest):
 
-            print(i, len(dataloader))
+            print(i, len(dataloaderTest))
             inputs = torch.tensor(sample_eval['image']).clone().detach()
             labels = torch.tensor(sample_eval['landmarks']).clone().detach()
 
@@ -182,7 +200,7 @@ def TrainNet(dataloader):
         # Record the Testing loss
         test_loss.append(loss / iterations)
         # Record the Testing accuracy
-        test_accuracy.append((100 * correct // len(dataloader)))
+        test_accuracy.append((100 * correct // len(dataloaderTest)))
 
         print('Epoch {}/{}, Training Loss: {:.3f}, Training Accuracy: {:.3f}, Testing Loss: {:.3f}, Testing Acc: {:.3f}'
               .format(epoch + 1, num_epochs, train_loss[-1], train_accuracy[-1],
@@ -205,7 +223,87 @@ def TrainNet(dataloader):
     plt.legend()
     plt.show()
 
-    # transforms_ori = transforms.Compose([transforms.ToTensor(),
-    # transforms.Normalize((0,), (1,))])
-    # transformed_dataset = DigitsLandmarksDataset(csv_file='data_xy.csv',
-    #                                            root_dir='data/IAI',transform=transforms_ori)
+
+def createDataSetsAndFolders(statisticDataSet, landScape, savePath, debug_flag):
+    # savePath = {'DATA': rootFolder_DATA, 'labels': rootFolder_labels, 'csv': rootFolder_csv}
+    # landScape = {'image': largeImage, 'mean': mean_largeImage, 'std': std_largeImage}
+    # statisticDataSet = {'dataSet': dataSet, 'mean': mean_gray, 'std': stddev_gray, 'csvLabels': xy_list}
+
+    largeImage = landScape['image']
+    mean_largeImage = landScape['mean']
+    std_largeImage = landScape['std']
+
+    dataSet = statisticDataSet['dataSet']
+    xy_list = statisticDataSet['csvLabels']
+
+    stddev_gray = statisticDataSet['std']
+    mean_gray = statisticDataSet['mean']
+
+    rootFolder_DATA = savePath['DATA']
+    rootFolder_labels = savePath['labels']
+    rootFolder = savePath['csv']
+
+    print('create ', int(len(dataSet) / 1), 'images')
+    # exit()
+    for i in range(int(len(dataSet) / 1)):
+        y = np.random.randint(0, largeImage.shape[0] - 28, 1)
+        x = np.random.randint(0, largeImage.shape[1] - 28, 1)
+        print('create i ', i, 'from ', len(dataSet))
+
+        largeImageCopy = largeImage.copy()
+        # print('largeImageCopy.shape = ', largeImageCopy.shape)
+        # print('x = ', x[0], ' y = ', y[0])
+        xy_list.append([str(i) + '.jpg', x[0] + 28 / 2, y[0] + 28 / 2])
+
+        temp = largeImageCopy[y[0]:y[0] + 28, x[0]:x[0] + 28]
+
+        random_image = dataSet[i][0].numpy() * stddev_gray + mean_gray
+        random_image = random_image.reshape(28, 28)
+        largeImageCopy[y[0]:y[0] + 28, x[0]:x[0] + 28] = random_image
+
+        largeImageCopy = std_largeImage * (largeImageCopy + mean_largeImage)
+        largeImageCopy = largeImageCopy / np.max(largeImageCopy) * 255
+        largeImageCopy = np.floor(largeImageCopy)
+        largeImageCopy = np.uint8(largeImageCopy)
+
+        segImage = np.zeros(largeImageCopy.shape)
+        segImage[largeImageCopy == 89] = 255
+        segImage = np.uint8(segImage)
+
+        # num_labels, labels_im = cv2.connectedComponents(segImage)
+        # output = cv2.connectedComponentsWithStats(segImage)
+        # (numLabels, labels, stats, centroids) = output
+        # area = stats[:, cv2.CC_STAT_AREA]
+        # area[0] = 0
+        # iMax = np.argmax(area)
+        # segImage = np.zeros(largeImageCopy.shape)
+        # segImage[labels == iMax] = 255
+
+        if debug_flag:
+            plt.figure(1)
+            plt.imshow(random_image)
+            plt.figure(86)
+            plt.imshow(segImage)
+            plt.figure(186)
+            plt.imshow(largeImageCopy)
+            # plt.plot(centroids[iMax][0], centroids[iMax][1], 'r.')
+
+        im = Image.fromarray(largeImageCopy)
+
+        # exit()
+        if im.mode == "F":
+            im = im.convert('RGB')
+        im.save(rootFolder_DATA + '/' + str(i) + '.jpg')
+
+        # im = Image.fromarray(segImage)
+        # if im.mode == "F":
+        # im = im.convert('RGB')
+        # im.save(rootFolder_labels + '/seg_' + str(i) + '.jpg')
+        # plt.show()
+
+    print(rootFolder + '_xy.csv')
+    with open(rootFolder + '_xy.csv', 'w') as f:
+        # using csv.writer method from CSV package
+        write = csv.writer(f)
+        for xy in xy_list:
+            write.writerow(xy)

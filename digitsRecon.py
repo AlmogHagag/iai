@@ -42,7 +42,7 @@ plt.imshow(random_image.reshape(28, 28), cmap='gray')
 print(train_dataset[20][1].item())  # Print the corresponding label for the image
 
 batch_size = 100
-epochs = 10
+epochs = 2
 
 # Make the dataset iterable
 train_load = torch.utils.data.DataLoader(dataset=train_dataset,
@@ -140,7 +140,7 @@ for i, (inputs, labels) in enumerate(train_load):
     iteration += 1
 
 # Training the CNN
-num_epochs = 10
+num_epochs = 4
 
 # Define the lists to store the results of loss and accuracy
 train_loss = []
