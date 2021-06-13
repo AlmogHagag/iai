@@ -58,7 +58,8 @@ print('There are {} images in the test set'.format(len(test_dataset)))
 print('There are {} batches in the train loader'.format(len(train_load)))
 print('There are {} batches in the testloader'.format(len(test_load)))
 
-
+print('almog222')
+exit()
 # Create the model class
 class CNN(nn.Module):
     def __init__(self):

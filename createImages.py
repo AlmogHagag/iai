@@ -74,85 +74,26 @@ test_dataset = datasets.MNIST(root='./data',
                               transform=transforms_ori)
 
 random_image = train_dataset[20][0].numpy() * stddev_gray + mean_gray
-MNISTimage = random_image
 
 print("\n\nsize train_dataset ", train_dataset.__sizeof__())
 print("type train_dataset len =", len(train_dataset))
+xy_listPatchOnNumber = []
 xy_list = []
 
 landScape = {'image': largeImage, 'mean': mean_largeImage, 'std': std_largeImage}
 
 savePath = {'DATA': rootFolder_DATA, 'labels': rootFolder_labels, 'csv': rootFolder_csv}
-statisticDataSet = {'dataSet': train_dataset, 'mean': mean_gray, 'std': stddev_gray, 'csvLabels': xy_list}
+statisticDataSet = {'dataSet': train_dataset, 'mean': mean_gray, 'std': stddev_gray, 'csvLabels': xy_list,
+                    'csvLabelsPatchOnNum': xy_listPatchOnNumber}
 fu.createDataSetsAndFolders(statisticDataSet, landScape, savePath, debug_flag)
 
-
+xy_listPatchOnNumber = []
 xy_list = []
 #
 savePath_test = {'DATA': rootFolder_DATA_test, 'labels': rootFolder_labels_test, 'csv': rootFolder_csv_test}
-statisticDataSet = {'dataSet': test_dataset, 'mean': mean_gray, 'std': stddev_gray, 'csvLabels': xy_list}
+statisticDataSet = {'dataSet': test_dataset, 'mean': mean_gray, 'std': stddev_gray, 'csvLabels': xy_list,
+                    'csvLabelsPatchOnNum': xy_listPatchOnNumber}
 fu.createDataSetsAndFolders(statisticDataSet, landScape, savePath_test, debug_flag)
 
 
 exit()
-
-for i in range(int(len(dataSet) / 4)):
-    y = np.random.randint(0, largeImage.shape[0] - 28, 1)
-    x = np.random.randint(0, largeImage.shape[1] - 28, 1)
-
-    largeImageCopy = largeImage.copy()
-    print('largeImageCopy.shape = ', largeImageCopy.shape)
-    print('x = ', x[0], ' y = ', y[0])
-    xy_list.append([str(i) + '.jpg', x[0] + 28 / 2, y[0] + 28 / 2])
-
-    temp = largeImageCopy[y[0]:y[0] + 28, x[0]:x[0] + 28]
-
-    random_image = dataSet[i][0].numpy() * stddev_gray + mean_gray
-    random_image = random_image.reshape(28, 28)
-    largeImageCopy[y[0]:y[0] + 28, x[0]:x[0] + 28] = random_image
-
-    largeImageCopy = std_largeImage * (largeImageCopy + mean_largeImage)
-    largeImageCopy = largeImageCopy / np.max(largeImageCopy) * 255
-    largeImageCopy = np.floor(largeImageCopy)
-    largeImageCopy = np.uint8(largeImageCopy)
-
-    segImage = np.zeros(largeImageCopy.shape)
-    segImage[largeImageCopy == 89] = 255
-    segImage = np.uint8(segImage)
-
-    num_labels, labels_im = cv2.connectedComponents(segImage)
-    output = cv2.connectedComponentsWithStats(segImage)
-    (numLabels, labels, stats, centroids) = output
-    area = stats[:, cv2.CC_STAT_AREA]
-    area[0] = 0
-    iMax = np.argmax(area)
-    segImage = np.zeros(largeImageCopy.shape)
-    segImage[labels == iMax] = 255
-
-    if debug_flag:
-        plt.figure(1)
-        plt.imshow(random_image)
-        plt.figure(86)
-        plt.imshow(segImage)
-        plt.figure(186)
-        plt.imshow(largeImageCopy)
-        plt.plot(centroids[iMax][0], centroids[iMax][1], 'r.')
-
-    im = Image.fromarray(largeImageCopy)
-
-    # exit()
-    if im.mode == "F":
-        im = im.convert('RGB')
-    im.save(rootFolder_DATA + '/' + str(i) + '.jpg')
-
-    im = Image.fromarray(segImage)
-    if im.mode == "F":
-        im = im.convert('RGB')
-    im.save(rootFolder_labels + '/seg_' + str(i) + '.jpg')
-    # plt.show()
-
-with open(rootFolder + '_xy.csv', 'w') as f:
-    # using csv.writer method from CSV package
-    write = csv.writer(f)
-    for xy in xy_list:
-        write.writerow(xy)

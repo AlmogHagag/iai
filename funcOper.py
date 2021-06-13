@@ -6,7 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms, utils
-
+from PIL import Image
 import cv2
 import torch
 import torch.nn as nn
@@ -21,6 +21,7 @@ from os import listdir
 from os.path import isfile, join
 import csv
 import datasetPythorch as iai
+import cnnDigitsClass as digCl
 
 
 def testModelVec(digits_dattaset, modelTest):
@@ -47,29 +48,283 @@ def testModelVec(digits_dattaset, modelTest):
     return mseTotal
 
 
-def testModel(digits_dattaset, index, strPath):
+def testModel(digits_dattaset, index, strPath, strPathDigits):
     sample = digits_dattaset.__getitem__(index)
     inputs = torch.tensor(sample['image'])
     labels = torch.tensor(sample['landmarks'])
     inputs2 = np.reshape(inputs, (1, 1, inputs.shape[1], inputs.shape[2]))
 
-    print("For one iteration, Test:")
-    print("second Input Shape:", inputs.shape)
-    print("second Labels Shape:", labels.shape)
-
     modelTest = iai.CNN_Detection()
     modelTest.load_state_dict(torch.load(strPath + '.pth'))
     modelTest.eval()
+    # print('full image tensor = ', inputs2.shape)
     outputs = modelTest(inputs2)
 
-    outputs = outputs.float()
+    esLocNumpy = outputs.detach().numpy()
+    esLocNumpy = esLocNumpy * 100
+    # print('esLocNumpy = ', esLocNumpy)
+    patchTorch = torch.zeros(inputs2.shape[0], inputs2.shape[1], 28, 28)
+    loc = esLocNumpy
+    loc[loc > 86] = 86
+    loc[loc < 14] = 14
+
+    for iPatch in range(esLocNumpy.shape[0]):
+        patchTorch[iPatch, 0, :, :] = inputs2[iPatch, :,
+                                      int(loc[iPatch, 1] - 28 / 2):int(loc[iPatch, 1] + 28 / 2),
+                                      int(loc[iPatch, 0] - 28 / 2):int(loc[iPatch, 0] + 28 / 2)]
+    modelClessifer = digCl.CNN()
+    modelClessifer.load_state_dict(torch.load(strPathDigits + '.pth'))
+    modelClessifer.eval()
+    # print('patchTorch = ', type(patchTorch))
+    # print('shape = ', patchTorch.shape)
+
+    outputDigits = modelClessifer(patchTorch)
+    _, predicted_nodata = torch.max(outputDigits, 1)
+    predicted_nodata = predicted_nodata.numpy()[0]
+    # print('\n\npredicted_nodata = ', predicted_nodata)
+    outputDigits = outputDigits.float()
     labels = labels.float()
-    print('outputs =', outputs * 100)
-    print('labels  = ', labels * 100)
+    # print('\n\noutputDigits =', outputDigits * 100)
+
+    # print('labels  = ', labels * 100)
     labels_np = labels.numpy() * 100
     image = inputs.numpy()
     image = np.reshape(image, (image.shape[1], image.shape[2]))
-    return labels_np, image
+
+    return labels_np, image, (predicted_nodata != labels_np[2]).sum()
+
+
+def TrainNetclesfier(dataloader, batch_size, dataloaderTest, modelDetection):
+    model = digCl.CNN()
+    CUDA = torch.cuda.is_available()
+    print('CUDA = ', CUDA)
+    if CUDA:
+        model = model.cuda()
+
+    loss_fn = nn.CrossEntropyLoss()
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+
+    iteration = 0
+    correct_nodata = 0
+    correct_data = 0
+    modelDetection.eval()
+
+    for i, sample in enumerate(dataloader):
+
+        if iteration == 1:
+            print('break')
+            break
+
+        print('ind image = ', i, 'sample = ', type(sample))
+        inputs = torch.tensor(sample['image']).clone().detach()
+        labels = torch.tensor(sample['landmarks']).clone().detach()
+        esLoc = modelDetection(inputs)
+        esLocNumpy = esLoc.detach().numpy()
+
+        inputs = Variable(inputs)
+        labels = Variable(labels)
+        if torch.cuda.is_available():
+            inputs = inputs.cuda()
+            labels = labels.cuda()
+
+        # print('esLoc = ', esLoc)
+        print(type(input))
+        image = inputs.numpy()
+        print(image.shape)
+        image = image[0, 0, :, :]
+        image = np.reshape(image, (100, 100))
+        print(image.shape)
+
+        print(type(image))
+        print(esLocNumpy.shape)
+        esLocNumpy = esLocNumpy * 100
+        patch = image[int(esLocNumpy[0, 1] - 28 / 2):int(esLocNumpy[0, 1] + 28 / 2),
+                int(esLocNumpy[0, 0] - 28 / 2):int(esLocNumpy[0, 0] + 28 / 2)]
+
+        patchTorch = torch.zeros(inputs.shape[0], inputs.shape[1], 28, 28)
+        for iPatch in range(esLocNumpy.shape[0]):
+            print(iPatch, ' esLocNumpy = ', esLocNumpy[iPatch, :])
+            patchTorch[iPatch, 0, :, :] = inputs[iPatch, :,
+                                     int(esLocNumpy[iPatch, 1] - 28 / 2):int(esLocNumpy[iPatch, 1] + 28 / 2),
+                                     int(esLocNumpy[iPatch, 0] - 28 / 2):int(esLocNumpy[iPatch, 0] + 28 / 2)]
+
+        # plt.figure(9)
+        # for iPatch in range(esLocNumpy.shape[0]):
+        #     plt.imshow(np.reshape(patchTorch[iPatch, 0, :, :].numpy(), (28, 28)))
+        #     plt.show()
+
+        output = model(patchTorch)
+        _, predicted_nodata = torch.max(output, 1)
+
+        print("Outputs Shape", output.shape)
+        print('labels = ', labels[:, 2] * 100)
+        correct_nodata += (predicted_nodata == labels[:, 2]).sum()
+        print("output Predictions: ", output)
+        print("\n\nlabels Predictions: ", labels)
+        print("\n\nCorrect Predictions error: ", correct_nodata)
+
+        iteration += 1
+
+    # exit()
+    # Training the CNN
+    num_epochs = 7
+
+    # Define the lists to store the results of loss and accuracy
+    train_loss = []
+    test_loss = []
+    train_accuracy = []
+    test_accuracy = []
+
+    # Training
+    for epoch in range(num_epochs):
+        # Reset these below variables to 0 at the begining of every epoch
+        correct = 0
+        iterations = 0
+        iter_loss = 0.0
+
+        model.train()  # Put the network into training mode
+
+        for i, sample in enumerate(dataloader):
+            print('ind image = ', i, 'from = ', len(dataloader))
+            inputs = torch.tensor(sample['image']).clone().detach().requires_grad_(True)
+            labels = torch.tensor(sample['landmarks']).clone().detach().requires_grad_(True)
+            esLoc = modelDetection(inputs)
+            esLocNumpy = esLoc.detach().numpy()
+
+            inputs = Variable(inputs)
+            labels = Variable(labels)
+            if torch.cuda.is_available():
+                inputs = inputs.cuda()
+                labels = labels.cuda()
+
+            # print(type(image))
+            # print(esLocNumpy.shape)
+            esLocNumpy = (esLocNumpy * 100).astype(int)
+            patchTorch = torch.zeros(inputs.shape[0], inputs.shape[1], 28, 28)
+            for iPatch in range(esLocNumpy.shape[0]):
+                # print(esLocNumpy[iPatch, :])
+                loc = (esLocNumpy[iPatch, :])
+                loc[loc > 86] = 86
+                loc[loc < 14] = 14
+
+                if (loc-esLocNumpy[iPatch, :]).sum()>0:
+                    print(esLocNumpy[iPatch, :])
+                    print('Loc= ', loc)
+                    # exit()
+
+                patchTorch[iPatch, 0, :, :] = inputs[iPatch, :, int(esLocNumpy[iPatch, 1] - 28 / 2):int(esLocNumpy[iPatch, 1] + 28 / 2),
+                                         int(esLocNumpy[iPatch, 0] - 28 / 2):int(esLocNumpy[iPatch, 0] + 28 / 2)]
+            labels = labels[:, 2] * 100
+            labels = labels.long()
+
+            # plt.figure(9)
+            # for iPatch in range(esLocNumpy.shape[0]):
+            #     plt.imshow(np.reshape(patchTorch[iPatch, 0, :, :].numpy(), (28, 28)))
+            #     print('label = ', labels[iPatch])
+            #     plt.show()
+
+            optimizer.zero_grad()  # Clear off the gradient in (w = w - gradient)
+            outputs = model(patchTorch)
+
+            loss = loss_fn(outputs, labels)
+            iter_loss += loss.item()  # Accumulate the loss
+
+            loss.backward()  # Backpropagation
+            optimizer.step()  # Update the weights
+
+            # Record the correct predictions for training data
+            _, predicted = torch.max(outputs, 1)
+            correct += (predicted == labels).sum().item()
+            iterations += 1
+
+        # Record the training loss
+        train_loss.append(iter_loss / iterations)
+        # Record the training accuracy
+        train_accuracy.append((100 * correct // len(dataloader)))
+
+        # Testing
+        loss = 0.0
+        correct = 0
+        iterations = 0
+
+        model.eval()  # Put the network into evaluation mode
+
+        for i, sample in enumerate(dataloaderTest):
+
+            print('testing ind image = ', i, 'from = ', len(dataloader))
+            inputs = torch.tensor(sample['image']).clone().detach().requires_grad_(True)
+            labels = torch.tensor(sample['landmarks']).clone().detach().requires_grad_(True)
+            esLoc = modelDetection(inputs)
+            esLocNumpy = esLoc.detach().numpy()
+
+            # Convert torch tensor to Variable
+            inputs = Variable(inputs)
+            labels = Variable(labels)
+
+            CUDA = torch.cuda.is_available()
+            if CUDA:
+                inputs = inputs.cuda()
+                labels = labels.cuda()
+
+            # image = inputs.numpy()
+            # image = image[0, 0, :, :]
+            # image = np.reshape(image, (image.shape[2], image.shape[3]))
+
+            esLocNumpy = (esLocNumpy * 100).astype(int)
+            patchTorch = torch.zeros(inputs.shape[0], inputs.shape[1], 28, 28)
+            for iPatch in range(esLocNumpy.shape[0]):
+                # print(esLocNumpy[iPatch, :])
+                loc = (esLocNumpy[iPatch, :])
+                loc[loc > 86] = 86
+                loc[loc < 14] = 14
+
+                if (loc - esLocNumpy[iPatch, :]).sum() > 0:
+                    print(esLocNumpy[iPatch, :])
+                    print('Loc= ', loc)
+                    # exit()
+
+                patchTorch[iPatch, 0, :, :] = inputs[iPatch, :,
+                                              int(esLocNumpy[iPatch, 1] - 28 / 2):int(esLocNumpy[iPatch, 1] + 28 / 2),
+                                              int(esLocNumpy[iPatch, 0] - 28 / 2):int(esLocNumpy[iPatch, 0] + 28 / 2)]
+            labels = labels[:, 2] * 100
+            labels = labels.long()
+
+            optimizer.zero_grad()  # Clear off the gradient in (w = w - gradient)
+            outputs = model(patchTorch)
+
+            loss = loss_fn(outputs, labels)  # Calculate the loss
+            loss += loss.item()  # Accumulate the loss
+            print('loss = ', loss)
+            # Record the correct predictions for training data
+            _, predicted = torch.max(outputs, 1)
+            correct += (predicted == labels).sum()
+            print('test percent correct = ', correct/iterations)
+            iterations += 1
+
+        # Record the Testing loss
+        test_loss.append(loss / iterations)
+        # Record the Testing accuracy
+        test_accuracy.append((100 * correct // len(dataloaderTest)))
+
+        print('Epoch {}/{}, Training Loss: {:.3f}, Training Accuracy: {:.3f}, Testing Loss: {:.3f}, Testing Acc: {:.3f}'
+              .format(epoch + 1, num_epochs, train_loss[-1], train_accuracy[-1], test_loss[-1], test_accuracy[-1]))
+
+    # Run this if you want to save the model
+    torch.save(model.state_dict(), 'CNN_MNIST_from_patch2.pth')
+
+    # Loss
+    f = plt.figure(num=1, figsize=(10, 10))
+    plt.plot(train_loss, label='Training Loss')
+    plt.plot(test_loss, label='Testing Loss')
+    plt.legend()
+    plt.show()
+
+    # Accuracy
+    f1 = plt.figure(num=2, figsize=(50, 50))
+    plt.plot(train_accuracy, label='Training Accuracy')
+    plt.plot(test_accuracy, label='Testing Accuracy')
+    plt.legend()
+    plt.show()
 
 
 def TrainNet(dataloader, batch_size, dataloaderTest):
@@ -107,11 +362,11 @@ def TrainNet(dataloader, batch_size, dataloaderTest):
 
         output = model(inputs)
         print("Outputs Shape", output.shape)
-
-        correct_nodata += (output == labels).sum()
+        print('labels = ', labels[:, 0:2])
+        correct_nodata += (output == labels[:, 0:2]).sum()
         print("output Predictions: ", output)
         print("\n\nlabels Predictions: ", labels)
-        print("\n\nCorrect Predictions: ", correct_nodata)
+        print("\n\nCorrect Predictions error: ", correct_nodata)
 
         iteration += 1
 
@@ -150,6 +405,7 @@ def TrainNet(dataloader, batch_size, dataloaderTest):
             outputs = model(inputs)
             outputs = outputs.float()
             labels = labels.float()
+            labels = labels[:, 0:2]
             # print('model label')
             # print(type(outputs))
             # print(type(labels))
@@ -191,6 +447,7 @@ def TrainNet(dataloader, batch_size, dataloaderTest):
             outputs = model(inputs)
             outputs = outputs.float()
             labels = labels.float()
+            labels = labels[:, 0:2]
 
             loss = loss_fn(outputs, labels)  # Calculate the loss
             loss += loss.item()  # Accumulate the loss
@@ -224,7 +481,7 @@ def TrainNet(dataloader, batch_size, dataloaderTest):
     plt.show()
 
 
-def createDataSetsAndFolders(statisticDataSet, landScape, savePath, debug_flag):
+def createDataSetsAndFolders(statisticDataSet, landScape, savePath, debug_flag, ADD_NOISE=False):
     # savePath = {'DATA': rootFolder_DATA, 'labels': rootFolder_labels, 'csv': rootFolder_csv}
     # landScape = {'image': largeImage, 'mean': mean_largeImage, 'std': std_largeImage}
     # statisticDataSet = {'dataSet': dataSet, 'mean': mean_gray, 'std': stddev_gray, 'csvLabels': xy_list}
@@ -235,6 +492,7 @@ def createDataSetsAndFolders(statisticDataSet, landScape, savePath, debug_flag):
 
     dataSet = statisticDataSet['dataSet']
     xy_list = statisticDataSet['csvLabels']
+    xy_list_patchNum = statisticDataSet['csvLabelsPatchOnNum']
 
     stddev_gray = statisticDataSet['std']
     mean_gray = statisticDataSet['mean']
@@ -253,11 +511,36 @@ def createDataSetsAndFolders(statisticDataSet, landScape, savePath, debug_flag):
         largeImageCopy = largeImage.copy()
         # print('largeImageCopy.shape = ', largeImageCopy.shape)
         # print('x = ', x[0], ' y = ', y[0])
-        xy_list.append([str(i) + '.jpg', x[0] + 28 / 2, y[0] + 28 / 2])
 
         temp = largeImageCopy[y[0]:y[0] + 28, x[0]:x[0] + 28]
 
         random_image = dataSet[i][0].numpy() * stddev_gray + mean_gray
+        if ADD_NOISE:
+            im_pil = Image.fromarray(random_image)
+            rotated = im_pil.rotate(np.random.randint(0, 360))
+            random_image = np.asarray(rotated)
+            mean = 0
+            row, col, ch = random_image.shape
+            var = 0.1
+            sigma = var ** 0.5
+            gauss = np.random.normal(mean, sigma, (row, col, ch))
+            gauss = gauss.reshape(row, col, ch)
+            random_image = random_image + gauss
+            random_image = cv2.flip(random_image, 0)
+            random_image = cv2.flip(random_image, 1)
+            random_image = cv2.resize(random_image, (20, 20))
+
+
+        numberOnPatch = dataSet[i][1].numpy()
+        xy_list.append([str(i) + '.jpg', x[0] + 28 / 2, y[0] + 28 / 2, numberOnPatch])
+
+        xy_list_patchNum.append([numberOnPatch])
+        # print('numberOnPatch = ', numberOnPatch)
+        # plt.figure(1)
+        # plt.imshow(np.reshape(random_image, (random_image.shape[1], random_image.shape[2])))
+        # plt.title('random_image from set')
+        # plt.show()
+
         random_image = random_image.reshape(28, 28)
         largeImageCopy[y[0]:y[0] + 28, x[0]:x[0] + 28] = random_image
 
@@ -306,4 +589,11 @@ def createDataSetsAndFolders(statisticDataSet, landScape, savePath, debug_flag):
         # using csv.writer method from CSV package
         write = csv.writer(f)
         for xy in xy_list:
+            write.writerow(xy)
+
+    print(rootFolder + 'patchNum_xy.csv')
+    with open(rootFolder + 'patchNum_xy.csv', 'w') as f:
+        # using csv.writer method from CSV package
+        write = csv.writer(f)
+        for xy in xy_list_patchNum:
             write.writerow(xy)
